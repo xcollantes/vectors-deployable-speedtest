@@ -38,13 +38,28 @@ args = parser.parse_args()
 
 # Configure logging based on whether log_file is specified.
 if args.log:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        filename=args.log,
-        filemode="a",
+    # Create logger with both file and console handlers.
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+
+    # Create formatter.
+    formatter = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
+
+    # File handler.
+    file_handler = logging.FileHandler(args.log, mode="a")
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+
+    # Console handler.
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+
+    # Add handlers to logger.
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
 else:
     logging.basicConfig(
         level=logging.INFO,
@@ -84,12 +99,12 @@ def load_data(path: str = "./data/shooting.json"):
     return docs
 
 
-def init_gemini_client() -> gemini_client.Client:
+def init_gemini_client():
     gemini_client.configure(api_key=os.getenv("GEMINI_API_KEY"))
     return gemini_client.Client()
 
 
-def qdrant_client(host: str, port: int):
+def qdrant_client(host: str, port: int) -> QdrantClient:
     client = QdrantClient(host=host, port=port)
     return client
 
@@ -115,7 +130,7 @@ def embed_qdrant(model, text: str) -> list[float]:
     return model.encode(text)
 
 
-def embed_gemini(client: gemini_client.Client, model: str, text: str) -> list[float]:
+def embed_gemini(client, model: str, text: str) -> list[float]:
     return client.embed_content(
         model=model,
         content=text,
@@ -125,12 +140,12 @@ def embed_gemini(client: gemini_client.Client, model: str, text: str) -> list[fl
 
 
 def search(
-    embed_query: list[float], collection: str, qdrant_client
+    embed_query: list[float], collection: str, qdrant_client, limit: int = 100
 ) -> list[models.PointStruct]:
     qdrant_results: list[models.PointStruct] = qdrant_client.search(
         collection_name=collection,
         query_vector=embed_query,
-        limit=100,
+        limit=limit,
     )
 
     return qdrant_results
@@ -142,8 +157,8 @@ def main():
     logging.info("Loading models")
 
     logging.info("Initializing Qdrant client")
-    qdrant_client = qdrant_client(args.qdrant_host, args.qdrant_port)
-    qdrant_collection(qdrant_client, args.collection, args.vector_size)
+    qclient = qdrant_client(args.qdrant_host, args.qdrant_port)
+    qdrant_collection(qclient, args.collection, args.vector_size)
 
     logging.info("Loading data")
     docs = load_data(args.data_path)
@@ -178,7 +193,7 @@ def main():
     ]
 
     logging.info("Uploading to Qdrant")
-    qdrant_client.upsert(collection_name=args.collection, points=points)
+    qclient.upsert(collection_name=args.collection, points=points)
     logging.info("Done")
 
     logging.info("Performing evaluations")
@@ -188,12 +203,11 @@ def main():
 
         # Measure search performance
         search_time = timeit.timeit(
-            lambda: search(q_embed, args.collection, qdrant_client),
+            lambda: search(q_embed, args.collection, qclient),
             number=args.n,
-            repeat=args.r,
         )
 
-        result = search(q_embed, args.collection, qdrant_client)
+        result = search(q_embed, args.collection, qclient, limit=3)
         logging.info(f"Search time: {search_time:.4f} seconds for {args.n} iterations")
         logging.info(result)
 
@@ -202,12 +216,11 @@ def main():
 
         # Measure search performance
         search_time = timeit.timeit(
-            lambda: search(q_embed, args.collection, qdrant_client),
+            lambda: search(q_embed, args.collection, qclient),
             number=args.n,
-            repeat=args.r,
         )
 
-        result = search(q_embed, args.collection, qdrant_client)
+        result = search(q_embed, args.collection, qclient, limit=3)
         logging.info(f"Search time: {search_time:.4f} seconds for {args.n} iterations")
         logging.info(result)
 
